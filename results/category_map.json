@@ -1,0 +1,14 @@
+{
+  "кафе и рестораны": "entertainment",
+  "продукты питания": "food",
+  "такси": "transport",
+  "едим дома": "food",
+  "смотрим дома": "entertainment",
+  "играем дома": "entertainment",
+  "кино": "entertainment",
+  "азс": "transport",
+  "косметика и парфюмерия": "online_shopping",
+  "отели": "travel",
+  "путешествия": "travel",
+  "развлечения": "entertainment"
+}
