@@ -1,0 +1,2 @@
+client_code,pct_travel,pct_transport,pct_food,pct_restaurants,pct_online,pct_entertainment,pct_utilities,pct_health,pct_other,total_spend,avg_txn,txn_count,median_txn,top3_share,salary_present,days_since_last_tx,sum_in,sum_out,transfers_count,name,fraction_non_kzt_tx
+31,0.0,0.23126119157050484,0.3401295605361074,0.0,0.0,0.4286092478933877,0.0,0.0,0.0,2343208.89,7810.6963000000005,300,6027.66,0.9999999999999998,0,13,1652209.5499999998,6927497.33,300,Дамир,0.0
