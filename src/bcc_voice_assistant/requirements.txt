@@ -1,0 +1,11 @@
+streamlit>=1.37
+pandas>=2.0
+numpy>=1.24
+python-dateutil
+pydantic>=2.7
+requests
+# Optional voice/chat pieces (install if you’ll demo them)
+pyttsx3           # offline TTS
+vosk              # offline STT (needs a local model folder)
+streamlit-webrtc  # mic capture
+audio-recorder-streamlit  # simple mic widget (fallback)
