@@ -14,7 +14,7 @@ if os.path.exists(_map_path):
 else:
     _CATEGORY_MAP = {}
 
-def map_category_text(s):
+def map_category_text(s: str) -> str:
     """Сначала ищем категорию в JSON-словаре, затем по ключевым словам."""
     s0 = str(s).strip().lower()
     if s0 in _CATEGORY_MAP:
@@ -27,20 +27,24 @@ def map_category_text(s):
 
 def aggregate_client_features(cid, trans_df=None, transf_df=None):
     out = {'client_code': cid}
-    # transactions
+
+    # === TRANSACTIONS ===
     if trans_df is None or len(trans_df) == 0:
         out.update({f'pct_{c}': 0.0 for c in BROAD_CATEGORIES})
         out.update({'total_spend': 0.0, 'avg_txn': 0.0, 'txn_count': 0,
-                    'median_txn': 0.0, 'top3_share': 0.0, 'salary_present': 0})
+                    'median_txn': 0.0, 'top3_share': 0.0,
+                    'salary_present': 0, 'days_since_last_tx': None})
     else:
         trans = trans_df.copy()
         trans['date'] = pd.to_datetime(trans.get('date', None), errors='coerce')
         trans['amount'] = pd.to_numeric(trans.get('amount', 0), errors='coerce').fillna(0)
         trans['category'] = trans.get('category', '').fillna('').astype(str)
         trans['broad_cat'] = trans['category'].apply(map_category_text)
+
         total_spend = trans['amount'].sum()
         spend_by_cat = trans.groupby('broad_cat')['amount'].sum().reindex(BROAD_CATEGORIES).fillna(0)
         pct_by_cat = (spend_by_cat / total_spend).fillna(0).to_dict()
+
         out.update({f'pct_{k}': float(pct_by_cat.get(k, 0.0)) for k in BROAD_CATEGORIES})
         out['total_spend'] = float(total_spend)
         out['avg_txn'] = float(trans['amount'].mean()) if len(trans) > 0 else 0.0
@@ -48,14 +52,16 @@ def aggregate_client_features(cid, trans_df=None, transf_df=None):
         out['median_txn'] = float(trans['amount'].median()) if len(trans) > 0 else 0.0
         top3 = spend_by_cat.sort_values(ascending=False).head(3).sum()
         out['top3_share'] = float((top3 / total_spend) if total_spend > 0 else 0.0)
-        out['salary_present'] = int(trans.get('status', '').astype(str).str.contains('зп', case=False, na=False).any()) if 'status' in trans.columns else 0
-        # recency
+        out['salary_present'] = int(trans.get('status', '').astype(str)
+                                    .str.contains('зп', case=False, na=False).any()) if 'status' in trans.columns else 0
+
         if trans['date'].notnull().any():
             last = trans['date'].max()
             out['days_since_last_tx'] = (pd.Timestamp.now() - last).days
         else:
             out['days_since_last_tx'] = None
-    # transfers
+
+    # === TRANSFERS ===
     if transf_df is None or len(transf_df) == 0:
         out.update({'sum_in': 0.0, 'sum_out': 0.0, 'transfers_count': 0})
     else:
@@ -67,13 +73,19 @@ def aggregate_client_features(cid, trans_df=None, transf_df=None):
         out['sum_in'] = float(sum_in)
         out['sum_out'] = float(sum_out)
         out['transfers_count'] = int(len(tr))
-    # preserve first name if available
+
+    # === AVG BALANCE (новое) ===
+    # грубая оценка: положительный нетто-поток = свободные средства
+    out['avg_monthly_balance_kzt'] = max(0.0, out.get('sum_in', 0.0) - out.get('sum_out', 0.0))
+
+    # === NAME ===
     if trans_df is not None and 'name' in trans_df.columns and len(trans_df) > 0:
         full = str(trans_df.iloc[0].get('name', ''))
         out['name'] = full.split()[0] if full else ''
     else:
         out['name'] = ''
-    # currency check (fraction of non-default currency)
+
+    # === FX FRACTION ===
     non_default = 0
     total_rows = 0
     if trans_df is not None and 'currency' in trans_df.columns:
@@ -83,6 +95,7 @@ def aggregate_client_features(cid, trans_df=None, transf_df=None):
         total_rows += len(transf_df)
         non_default += (transf_df['currency'].astype(str).str.upper() != DEFAULT_CURRENCY).sum()
     out['fraction_non_kzt_tx'] = float(non_default / total_rows) if total_rows > 0 else 0.0
+
     return out
 
 def build_features_table(clients_dict):

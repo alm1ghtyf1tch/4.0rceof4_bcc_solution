@@ -14,30 +14,50 @@ BROAD_CATEGORY_KEYWORDS = {
 # Категорийная последовательность (используется при агрегации)
 BROAD_CATEGORIES = list(BROAD_CATEGORY_KEYWORDS.keys()) + ['other']
 
-# Продукты и их примерные параметры (cashback в долях, процент в год для депозита)
 PRODUCT_PARAMS = {
-    'Travel Card': {
-        'cashback': {'travel': 0.03, 'transport': 0.04},
-        'cap': None
+    "Карта для путешествий": {
+        "cashback": {"travel": 0.04, "transport": 0.04},
+        "cap_monthly": None  # при наличии лимита, ставьте число в KZT
     },
-    'Shopper Card': {
-        'cashback': {'online': 0.05, 'food': 0.03},
-        'cap': None
+    "Премиальная карта": {
+        "base_cashback": 0.02,
+        # дополнительные ступени будут рассчитаны по avg_monthly_balance_kzt:
+        # 1-6 млн -> 0.03, >6 млн -> 0.04
+        "bonus_categories_cashback": {"jewelry": 0.04, "cosmetics": 0.04, "restaurants": 0.04},
+        "fee_saving_per_transfer": 0.0,
+        "cashback_monthly_cap": 100000.0
     },
-    'Premium Card': {
-        'cashback': {'restaurants': 0.04, 'entertainment': 0.03},
-        'general_cashback': 0.02,
-        'cap': None
+    "Кредитная карта": {
+    "favorite_cb": 0.10,
+    "online_cb": 0.10,
+    "eligibility_factor": 0.15,       # доля топ3 трат, реально попадающая под 10% (настраиваемо)
+    "cashback_monthly_cap": 100000.0  # месячный лимит кешбэка (KZT), настраиваемо
     },
-    'Everyday Card': {
-        'cashback': {'food': 0.01, 'utilities': 0.01},
-        'general_cashback': 0.01,
-        'cap': None
+    "Обмен валют": {
+        "spread_benefit": 0.002  # 0.2% экономии на объёме FX
     },
-    'Deposit': {
-        'annual_rate': 0.06  # годовой
+    "Кредит наличными": {
+        "rate": 0.12  # не считаем выгоду как положительную в обычном смысле
+    },
+    "Депозит Мультивалютный": {
+        "annual_rate": 0.145
+    },
+    "Депозит Сберегательный": {
+        "annual_rate": 0.165
+    },
+    "Депозит Накопительный": {
+        "annual_rate": 0.155
+    },
+    "Инвестиции": {
+        "annual_rate": 0.10  # условный годовой доход (оценка), используем для free_balance
+    },
+    "Золотые слитки": {
+        "annual_rate": 0.05  # условная оценка долгосрочной доходности/хранения
     }
 }
+
+
+
 
 # Общие настройки
 DEFAULT_CURRENCY = 'KZT'
