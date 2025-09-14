@@ -1,67 +1,74 @@
-
-## `bcc_voice_assistant/app.py`
-# Streamlit front-end for the BCC Hackathon demo
-# - Reuses your existing src/ pipeline (features -> rank -> push)
-# - Casual chat that can also fill a FX transfer form (slot filling + optional LLM)
-# - Optional voice in/out (Vosk + pyttsx3)
-#
-# Tips for judges:
-# 1) Upload a ZIP with transactions/transfers for 60 clients, or select multiple CSVs.
-# 2) Click "Run recommender".
-# 3) Use "Chat" to ask for help or say something like:
-#    "нужно оплатить обучение 2400 USD завтра получатель John Smith в США, банк Chase, SWIFT CHASUS33"
-#    → slots will auto-fill.
-
-
-#To RUN THE APP RUN 
-#cd "C:\Users\Zhangir\Desktop\Hackathon AI voice assistant\4.0rceof4_bcc_solution"
-#streamlit run ".\src\bcc_voice_assistant\app.py"
+# project/src/bcc_voice_assistant/app.py
+# BCC Voice & Chat Assistant (Streamlit)
+# - Reuses src/ pipeline (features -> rank -> push)
+# - Chat + FX form autofill (slot filling + optional Ollama)
+# - Optional voice (Vosk STT + pyttsx3 TTS)
 
 from __future__ import annotations
-import os, sys
+import sys, tempfile
 from pathlib import Path
-import streamlit as st
 import pandas as pd
-import tempfile
-import json
+import streamlit as st
 
+# ── Locate a folder that CONTAINS "src" and add it to sys.path ─────────────────
+APP_DIR = Path(__file__).resolve().parent  # .../project/src/bcc_voice_assistant
+CANDIDATE_ROOTS: list[Path] = []
 
-# --- Ensure we can import your repo's src/ modules ---
-# app.py path: <repo_root>\src\bcc_voice_assistant\app.py
-ROOT = Path(__file__).resolve().parents[2]   # -> <repo_root>
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+# typical layouts after your merges:
+#   <repo>/project/src/...   (this file lives here)
+#   <repo>/src/...
+try:
+    CANDIDATE_ROOTS.append(APP_DIR.parents[1])  # .../project/src
+    CANDIDATE_ROOTS.append(APP_DIR.parents[2])  # .../project
+    CANDIDATE_ROOTS.append(APP_DIR.parents[3])  # .../<repo_root>
+except IndexError:
+    pass
 
-SRC_DIR = ROOT / "src"   # for file paths later (NOT for imports)
+SELECTED_ROOT = None
+for root in CANDIDATE_ROOTS:
+    if root and (root / "src").is_dir():
+        SELECTED_ROOT = root
+        break
 
-# ---- imports (package-style) ----
-from src.pipeline import run_pipeline_from_zip
+# Fallback: walk further up just in case
+if SELECTED_ROOT is None:
+    p = APP_DIR
+    for _ in range(6):
+        if (p / "src").is_dir():
+            SELECTED_ROOT = p
+            break
+        p = p.parent
+
+if SELECTED_ROOT is None:
+    st.stop()  # hard fail early for clarity
+else:
+    if str(SELECTED_ROOT) not in sys.path:
+        sys.path.insert(0, str(SELECTED_ROOT))
+
+# ── Import pipeline pieces from src/ ───────────────────────────────────────────
 from src.data_loader import load_zip_by_client, load_csv_list
 from src.feature_engineering import build_features_table
 from src.ranking import rank_by_benefit
 from src.push_generator import generate_push
 from src.config import PRODUCT_PARAMS, RESULTS_DIR
 
-# --- Assistant helpers ---
-from assistant.llm import chat as llm_chat, extract_structured
-from assistant.knowledge import PRODUCT_SUMMARIES, TOV_HINT
-from assistant.slot_filling import TransferForm, heuristic_fill
-from assistant.forms import form_editor, export_buttons
+# ── Assistant helpers ──────────────────────────────────────────────────────────
+from src.bcc_voice_assistant.assistant.llm import chat as llm_chat, extract_structured, status as llm_status
+from src.bcc_voice_assistant.assistant.knowledge import PRODUCT_SUMMARIES, TOV_HINT
+from src.bcc_voice_assistant.assistant.slot_filling import TransferForm, heuristic_fill
+from src.bcc_voice_assistant.assistant.forms import form_editor, export_buttons
 from src.bcc_voice_assistant.assistant.voice import stt_vosk, tts_pyttsx3, MODEL_DIR
-st.caption(f"Vosk model path resolved to: {MODEL_DIR}")
-from assistant.llm import chat as llm_chat, extract_structured
-from assistant.llm import status as llm_status  # add this import
-from assistant.voice import MODEL_DIR
-st.caption(f"Vosk model path: {MODEL_DIR}")
 
 st.set_page_config(page_title="BCC Voice & Chat Assistant", layout="wide")
 
-with st.sidebar:
-    ...
-    s = llm_status()
-    st.caption(f"LLM: {'✅ Ollama' if s['ollama_ok'] else '❌ Fallback (rules)'}  •  {s['model']} @ {s['url']}")
+# ── helpers ────────────────────────────────────────────────────────────────────
+def dedup_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop duplicate-named columns (keep the first) for Arrow/Streamlit."""
+    if df is None:
+        return df
+    return df.loc[:, ~pd.Index(df.columns).duplicated(keep="first")]
 
-# ---- Sidebar: Data upload & run -------------------------------------------------
+# ── Sidebar: data upload & status ──────────────────────────────────────────────
 with st.sidebar:
     st.title("📊 Data & Recommender")
     mode = st.radio("Input type", ["ZIP with all CSVs", "Multiple CSV files"])
@@ -71,10 +78,14 @@ with st.sidebar:
         uploaded_zip = st.file_uploader("Upload ZIP", type=["zip"])
     else:
         uploaded_csvs = st.file_uploader("Upload CSV files", type=["csv"], accept_multiple_files=True)
+
     topn = st.slider("Top-N products", 1, 5, 4)
     run_btn = st.button("Run recommender")
 
-# ---- Main layout with tabs ------------------------------------------------------
+    s = llm_status()
+    st.caption(f"LLM: {'✅ Ollama' if s.get('ollama_ok') else '❌ Fallback (rules)'} • {s.get('model')} @ {s.get('url')}")
+
+# ── Main layout ────────────────────────────────────────────────────────────────
 st.title("BCC Voice & Chat Assistant")
 tabs = st.tabs(["🏠 Overview", "💬 Chat", "🎙 Voice (optional)"])
 
@@ -88,112 +99,148 @@ if "chat_history" not in st.session_state:
 if "transfer_form" not in st.session_state:
     st.session_state.transfer_form = TransferForm()
 
-# ---- RUN PIPELINE ---------------------------------------------------------------
+# ── Runner ─────────────────────────────────────────────────────────────────────
 def run_pipeline():
-    # 1) Load data to per-client dict
+    """Load (ZIP or CSVs) → features → ranking → push → flatten → dedup → save."""
+    # 1) Load data into per-client dict
     if uploaded_zip is not None:
         clients = load_zip_by_client(uploaded_zip)
     else:
         if not uploaded_csvs:
             st.warning("Please upload CSVs or ZIP.")
             return
-        tmp_paths = []
-        TMPDIR = Path(tempfile.gettempdir()) / "bcc_uploads"
-        TMPDIR.mkdir(parents=True, exist_ok=True)
+        tmpdir = Path(tempfile.mkdtemp(prefix="bcc_csv_"))
+        paths = []
         for f in uploaded_csvs:
-            p = TMPDIR / f.name
-            with open(p, "wb") as out:
-                out.write(f.read())
-            tmp_paths.append(str(p))
-        clients = load_csv_list(tmp_paths)
+            p = tmpdir / f.name
+            p.write_bytes(f.read())
+            paths.append(str(p))
+        clients = load_csv_list(paths)
 
-    # 2) Build features
+    # 2) Features
     features = build_features_table(clients)
 
-    # 3) Rank products
-    recs = rank_by_benefit(features, top_n=topn)
+    # 3) Ranking (ensure DataFrame even if API changes)
+    recs_df = rank_by_benefit(features, top_n=topn)
+    if isinstance(recs_df, tuple):
+        # If someone changed API, pick the DF that has product columns
+        recs_df = next((x for x in recs_df if isinstance(x, pd.DataFrame)), None)
+        if recs_df is None:
+            st.error("Unexpected ranking output (not a DataFrame).")
+            return
 
-    # 4) Merge name & push for top-1
-    small = features[["client_code","name"]] if "name" in features.columns else features[["client_code"]]
-    merged = recs.merge(small, on="client_code", how="left")
+    # 4) Merge name & generate push for top-1
+    small = features[["client_code", "name"]] if "name" in features.columns else features[["client_code"]]
+    merged = recs_df.merge(small, on="client_code", how="left")
+
+    # avoid duplicate push_top1 if pipeline already added it
+    if "push_top1" in merged.columns:
+        merged = merged.drop(columns=["push_top1"])
     pushes = []
     for _, r in merged.iterrows():
-        push = generate_push(r.get("name",""), r.get("top1", None), r.get("top1_benefit", 0.0))
-        pushes.append(push)
+        pushes.append(
+            generate_push(
+                r.get("name", ""),
+                r.get("top1", None),
+                float(r.get("top1_benefit", 0.0) or 0.0),
+            )
+        )
     merged["push_top1"] = pushes
-    merged["top_products_json"] = merged["top_products"].apply(
-    lambda x: json.dumps(x, ensure_ascii=False) if isinstance(x, (list, tuple)) else ""
-)
-    merged = merged.drop(columns=["top_products"])
 
+    # 5) Flatten top_products into scalar columns (only if not already present)
+    def tp_to_cols(tp):
+        out = {}
+        if isinstance(tp, (list, tuple)):
+            for i in range(4):
+                if i < len(tp) and isinstance(tp[i], (list, tuple)) and len(tp[i]) >= 2:
+                    out[f"top{i+1}_product"] = tp[i][0]
+                    out[f"top{i+1}_benefit"] = float(tp[i][1] or 0.0)
+                else:
+                    out[f"top{i+1}_product"] = None
+                    out[f"top{i+1}_benefit"] = 0.0
+        else:
+            for i in range(4):
+                out[f"top{i+1}_product"] = None
+                out[f"top{i+1}_benefit"] = 0.0
+        return out
+
+    if "top_products" in merged.columns:
+        already = set(merged.columns)
+        extra = merged["top_products"].apply(tp_to_cols).apply(pd.Series)
+        # Only keep columns that do NOT already exist
+        extra = extra[[c for c in extra.columns if c not in already]]
+        merged = pd.concat([merged.drop(columns=["top_products"]), extra], axis=1)
+
+    # final safety: drop any duplicate-named columns (Arrow requirement)
+    merged = dedup_columns(merged)
+
+    # Save
     st.session_state.features_df = features
     st.session_state.recs_df = merged
 
+# ── Overview tab ───────────────────────────────────────────────────────────────
 with tabs[0]:
+    st.caption(f"Vosk model path resolved to: {MODEL_DIR or 'not found'}")
     st.subheader("1) Recommender")
     if run_btn:
         run_pipeline()
 
     if st.session_state.features_df is not None:
         st.success("Features built ✅")
-        st.dataframe(st.session_state.features_df.head(20), use_container_width=True)
+        safe_feat = dedup_columns(st.session_state.features_df)
+        st.dataframe(safe_feat.head(20), use_container_width=True)
 
     if st.session_state.recs_df is not None:
         st.success("Recommendations ready ✅")
-        st.dataframe(st.session_state.recs_df.head(30), use_container_width=True)
+        safe_recs = dedup_columns(st.session_state.recs_df)
+        st.dataframe(safe_recs.head(30), use_container_width=True)
 
-        # Export CSVs to local /results
+        # Export CSVs to <SELECTED_ROOT>/src/ + RESULTS_DIR from config
+        SRC_DIR = (SELECTED_ROOT / "src").resolve()
         outdir = (SRC_DIR / RESULTS_DIR).resolve()
         outdir.mkdir(parents=True, exist_ok=True)
-        f_features = outdir / "features_streamlit.csv"
-        f_recs = outdir / "recommendations_streamlit.csv"
-        st.session_state.features_df.to_csv(f_features, index=False)
-        st.session_state.recs_df.to_csv(f_recs, index=False)
+        (safe_feat if 'safe_feat' in locals() else st.session_state.features_df).to_csv(outdir / "features_streamlit.csv", index=False)
+        safe_recs.to_csv(outdir / "recommendations_streamlit.csv", index=False)
 
         c1, c2 = st.columns(2)
         with c1:
-            st.download_button("⬇️ Download features.csv", data=open(f_features, "rb").read(),
+            st.download_button("⬇️ Download features.csv",
+                               data=open(outdir / "features_streamlit.csv", "rb").read(),
                                file_name="features.csv", mime="text/csv")
         with c2:
-            st.download_button("⬇️ Download recommendations.csv", data=open(f_recs, "rb").read(),
+            st.download_button("⬇️ Download recommendations.csv",
+                               data=open(outdir / "recommendations_streamlit.csv", "rb").read(),
                                file_name="recommendations.csv", mime="text/csv")
 
     st.divider()
     st.subheader("2) Product Glossary (for demo talk track)")
     for k, v in PRODUCT_SUMMARIES.items():
         st.markdown(f"**{k}** — {v}")
-
     st.caption("TOV: " + TOV_HINT + " (см. ТЗ по пуш-сообщениям).")
 
-# ---- CHAT -----------------------------------------------------------------------
+# ── Chat tab ───────────────────────────────────────────────────────────────────
 with tabs[1]:
     st.subheader("Чат с ассистентом")
-    # Show history
+
     for msg in st.session_state.chat_history:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
     user_msg = st.chat_input("Спросите про продукт или продиктуйте реквизиты перевода…")
     if user_msg:
-        st.session_state.chat_history.append({"role":"user","content":user_msg})
+        st.session_state.chat_history.append({"role": "user", "content": user_msg})
 
-        # 1) Try to extract structured transfer data
         form = heuristic_fill(st.session_state.transfer_form, user_msg)
-
-        # 2) If LLM available, refine extraction to JSON
         schema = "{amount: number, currency: string, beneficiary_name: string, beneficiary_bank: string, beneficiary_country: string, beneficiary_account_iban: string, beneficiary_swift: string, purpose: string, execution_date: string}"
         extracted = extract_structured(user_msg, schema_hint=schema)
         if extracted:
             for k, v in extracted.items():
                 if hasattr(form, k) and getattr(form, k) in (None, "", 0):
                     setattr(form, k, v)
-
         st.session_state.transfer_form = form
 
-        # 3) Chat answer (uses Ollama if present, else rule-based)
         answer = llm_chat(user_msg, st.session_state.chat_history)
-
-        st.session_state.chat_history.append({"role":"assistant","content":answer})
+        st.session_state.chat_history.append({"role": "assistant", "content": answer})
         with st.chat_message("assistant"):
             st.markdown(answer)
 
@@ -203,10 +250,10 @@ with tabs[1]:
     st.session_state.transfer_form = updated
     export_buttons(st.session_state.transfer_form)
 
-# ---- VOICE (OPTIONAL) ----------------------------------------------------------
+# ── Voice tab ──────────────────────────────────────────────────────────────────
 with tabs[2]:
     st.subheader("Голосовой режим (офлайн, опционально)")
-    st.caption(f"Vosk model path resolved to: {MODEL_DIR}")
+    st.caption(f"Vosk model path resolved to: {MODEL_DIR or 'not found'}")
 
     try:
         from audio_recorder_streamlit import audio_recorder
@@ -215,15 +262,12 @@ with tabs[2]:
         audio_bytes = None
         st.info("Установите audio-recorder-streamlit для записи микрофона.")
 
-    # Only proceed if we actually have audio
     if audio_bytes:
         st.audio(audio_bytes, format="audio/wav")
-
         recognized = stt_vosk(audio_bytes) or ""
         if recognized:
             st.write("Распознано:", f"**{recognized}**")
 
-            # 👉 auto-fill the FX transfer form from voice text
             form = heuristic_fill(st.session_state.transfer_form, recognized)
             schema = "{amount: number, currency: string, beneficiary_name: string, beneficiary_bank: string, beneficiary_country: string, beneficiary_account_iban: string, beneficiary_swift: string, purpose: string, execution_date: string}"
             extracted = extract_structured(recognized, schema_hint=schema)
@@ -233,11 +277,9 @@ with tabs[2]:
                         setattr(form, k, v)
             st.session_state.transfer_form = form
 
-            # Chat reply + TTS
-            st.session_state.chat_history.append({"role":"user","content":recognized})
+            st.session_state.chat_history.append({"role": "user", "content": recognized})
             reply = llm_chat(recognized, st.session_state.chat_history)
-            st.session_state.chat_history.append({"role":"assistant","content":reply})
-
+            st.session_state.chat_history.append({"role": "assistant", "content": reply})
             st.write("Ответ ассистента:", reply)
             wav = tts_pyttsx3(reply)
             if wav:

@@ -3,24 +3,28 @@ import io, os
 from pathlib import Path
 from typing import Optional
 import re
-MODEL_DIR = Path(r"C:\Users\Zhangir\Desktop\Hackathon AI voice assistant\4.0rceof4_bcc_solution\src\bcc_voice_assistant\models\vosk-model")
-
-# ---------- robust model path detection ----------
 THIS_DIR = Path(__file__).resolve().parent
 
 def _valid_model_dir(p: Path) -> bool:
     try:
-        return (
-            isinstance(p, Path)
-            and p.exists()
-            and (p / "conf").exists()
-            and (p / "am").exists()
-        )
+        return p.exists() and (p / "conf").exists() and (p / "am").exists()
     except Exception:
         return False
 
-# Only use env var if it's non-empty AND points to a real Vosk model folder
 _env = os.getenv("VOSK_MODEL_PATH", "").strip()
+CANDIDATES = []
+if _env:
+    CANDIDATES.append(Path(_env).expanduser().resolve())
+
+# try common locations (both pre-merge and post-merge layouts)
+CANDIDATES += [
+    (THIS_DIR.parents[1] / "models" / "vosk-model").resolve(),               # project/src/bcc_voice_assistant/models
+    (THIS_DIR.parents[2] / "models" / "vosk-model").resolve(),               # src/bcc_voice_assistant/models
+    (Path.cwd() / "project" / "src" / "bcc_voice_assistant" / "models" / "vosk-model").resolve(),
+    (Path.cwd() / "src" / "bcc_voice_assistant" / "models" / "vosk-model").resolve(),
+]
+
+MODEL_DIR = next((p for p in CANDIDATES if _valid_model_dir(p)), None)
 
 
 # ---------- STT / TTS ----------
