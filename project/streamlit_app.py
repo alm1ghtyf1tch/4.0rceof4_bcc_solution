@@ -3,8 +3,8 @@ import pandas as pd
 
 st.title('Recommendations Dashboard')
 
-features = pd.read_csv('features.csv')
-recs = pd.read_csv('recommendations.csv')
+features = pd.read_csv('results/features.csv')
+recs = pd.read_csv('results/recommendations.csv')
 
 client = st.selectbox('Выберите клиента', sorted(features['client_code'].tolist()))
 f = features[features['client_code'] == client].iloc[0]
